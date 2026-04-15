@@ -16,7 +16,14 @@ import {
   X,
   Loader2,
   AlertCircle,
-  CheckCircle2
+  CheckCircle2,
+  Clock,
+  Calendar as CalendarIcon,
+  Plus,
+  ArrowUpRight,
+  ArrowDownLeft,
+  BarChart3,
+  Globe
 } from 'lucide-react';
 import { 
   signInWithPopup, 
@@ -40,7 +47,7 @@ import {
   getDocFromServer
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
-import { UserProfile, Transaction } from './types';
+import { UserProfile, Transaction, Card, ForexTrade } from './types';
 import { motion, AnimatePresence } from 'motion/react';
 import { GoogleGenAI } from '@google/genai';
 import ReactMarkdown from 'react-markdown';
@@ -61,22 +68,34 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-const BTC_PRICE_MYR = 285000; // Mock real-time price
+const BTC_PRICE_MYR = 285000; 
+const USD_MYR = 4.72;
+const EUR_MYR = 5.12;
+const GBP_MYR = 5.98;
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [cards, setCards] = useState<Card[]>([]);
+  const [forexTrades, setForexTrades] = useState<ForexTrade[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'home' | 'transfer' | 'swap' | 'history' | 'assistant'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'transfer' | 'swap' | 'history' | 'assistant' | 'cards' | 'forex'>('home');
   const [showTransferModal, setShowTransferModal] = useState<string | null>(null);
+  const [showAddCardModal, setShowAddCardModal] = useState(false);
   const [swapMode, setSwapMode] = useState<'MYRtoBTC' | 'BTCtoMYR'>('MYRtoBTC');
   const [swapAmount, setSwapAmount] = useState('');
   const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'model'; text: string }[]>([]);
   const [isChatting, setIsChatting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [currentTime, setCurrentTime] = useState(new Date());
 
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -134,9 +153,21 @@ export default function App() {
       setLoading(false);
     });
 
+    const qCards = query(collection(db, 'cards'), where('userId', '==', uid));
+    const unsubCards = onSnapshot(qCards, (snapshot) => {
+      setCards(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Card)));
+    });
+
+    const qForex = query(collection(db, 'forex_trades'), where('userId', '==', uid), orderBy('timestamp', 'desc'));
+    const unsubForex = onSnapshot(qForex, (snapshot) => {
+      setForexTrades(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ForexTrade)));
+    });
+
     return () => {
       unsubProfile();
       unsubTransactions();
+      unsubCards();
+      unsubForex();
     };
   };
 
@@ -154,7 +185,7 @@ export default function App() {
   const handleTransfer = async (type: string, destination: string, amount: number) => {
     if (!profile || !user) return;
     
-    if (profile.balanceMYR < amount) {
+    if (type !== 'Deposit' && profile.balanceMYR < amount) {
       setError("Insufficient MYR balance");
       return;
     }
@@ -162,7 +193,7 @@ export default function App() {
     try {
       const tx: Transaction = {
         userId: user.uid,
-        type: 'transfer',
+        type: type === 'Deposit' ? 'deposit' : type === 'Withdraw' ? 'withdraw' : 'transfer',
         subType: type,
         amount,
         currency: 'MYR',
@@ -172,13 +203,18 @@ export default function App() {
       };
 
       await addDoc(collection(db, 'transactions'), tx);
+      
+      const newBalance = type === 'Deposit' 
+        ? profile.balanceMYR + amount 
+        : profile.balanceMYR - amount;
+
       await updateDoc(doc(db, 'users', user.uid), {
-        balanceMYR: profile.balanceMYR - amount
+        balanceMYR: newBalance
       });
       setShowTransferModal(null);
     } catch (err) {
-      console.error("Transfer failed:", err);
-      setError("Transfer failed. Please try again.");
+      console.error("Operation failed:", err);
+      setError("Operation failed. Please try again.");
     }
   };
 
@@ -270,6 +306,57 @@ export default function App() {
     }
   };
 
+  const handleAddCard = async (type: 'visa' | 'mastercard' | 'tng', last4: string, expiry: string, name: string) => {
+    if (!user) return;
+    try {
+      await addDoc(collection(db, 'cards'), {
+        userId: user.uid,
+        type,
+        last4,
+        expiry,
+        cardholderName: name,
+        addedAt: serverTimestamp()
+      });
+      setShowAddCardModal(false);
+    } catch (err) {
+      setError("Failed to add card.");
+    }
+  };
+
+  const handleForexTrade = async (pair: string, type: 'buy' | 'sell', amount: number, price: number) => {
+    if (!user || !profile) return;
+    if (profile.balanceMYR < amount) {
+      setError("Insufficient MYR balance for trade.");
+      return;
+    }
+
+    try {
+      await addDoc(collection(db, 'forex_trades'), {
+        userId: user.uid,
+        pair,
+        type,
+        entryPrice: price,
+        amount,
+        status: 'open',
+        timestamp: serverTimestamp()
+      });
+      await updateDoc(doc(db, 'users', user.uid), {
+        balanceMYR: profile.balanceMYR - amount
+      });
+      await addDoc(collection(db, 'transactions'), {
+        userId: user.uid,
+        type: 'trade',
+        subType: `Forex ${type.toUpperCase()} ${pair}`,
+        amount,
+        currency: 'MYR',
+        status: 'completed',
+        timestamp: serverTimestamp()
+      });
+    } catch (err) {
+      setError("Trade failed.");
+    }
+  };
+
   const askGemini = async (text: string) => {
     const newMessages = [...chatMessages, { role: 'user' as const, text }];
     setChatMessages(newMessages);
@@ -326,11 +413,16 @@ export default function App() {
     <div className="min-h-screen bg-neutral-50 text-neutral-900 font-sans pb-24">
       {/* Header */}
       <header className="bg-white border-bottom border-neutral-100 px-6 py-4 flex items-center justify-between sticky top-0 z-10">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
           <div className="w-8 h-8 bg-neutral-900 rounded-lg flex items-center justify-center">
             <Wallet className="w-5 h-5 text-white" />
           </div>
-          <span className="font-bold text-xl tracking-tight">RazifWallet</span>
+          <div>
+            <span className="font-bold text-lg tracking-tight block leading-none">RazifWallet</span>
+            <span className="text-[10px] text-neutral-400 font-mono">
+              {currentTime.toLocaleDateString()} • {currentTime.toLocaleTimeString()}
+            </span>
+          </div>
         </div>
         <div className="flex items-center gap-4">
           <button onClick={() => setActiveTab('assistant')} className="p-2 hover:bg-neutral-100 rounded-full transition-colors relative">
@@ -485,10 +577,83 @@ export default function App() {
           </div>
         )}
 
+        {activeTab === 'cards' && (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-2xl font-bold">My Cards</h2>
+              <button 
+                onClick={() => setShowAddCardModal(true)}
+                className="bg-neutral-900 text-white p-2 rounded-xl hover:bg-neutral-800 transition-colors"
+              >
+                <Plus className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="space-y-4">
+              {cards.map((card) => (
+                <motion.div 
+                  key={card.id}
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className={cn(
+                    "p-6 rounded-[2rem] text-white relative overflow-hidden shadow-lg",
+                    card.type === 'visa' ? "bg-gradient-to-br from-blue-600 to-blue-800" : 
+                    card.type === 'mastercard' ? "bg-gradient-to-br from-orange-500 to-red-600" : 
+                    "bg-gradient-to-br from-blue-400 to-blue-600"
+                  )}
+                >
+                  <div className="relative z-10">
+                    <div className="flex justify-between items-start mb-8">
+                      <CreditCard className="w-8 h-8 opacity-80" />
+                      <span className="text-xs font-bold uppercase tracking-widest">{card.type}</span>
+                    </div>
+                    <p className="text-xl font-mono mb-6 tracking-[0.2em]">**** **** **** {card.last4}</p>
+                    <div className="flex justify-between items-end">
+                      <div>
+                        <p className="text-[10px] opacity-60 uppercase mb-1">Card Holder</p>
+                        <p className="text-sm font-bold">{card.cardholderName}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] opacity-60 uppercase mb-1">Expires</p>
+                        <p className="text-sm font-bold">{card.expiry}</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="absolute top-[-20%] right-[-10%] w-48 h-48 bg-white/10 rounded-full blur-2xl"></div>
+                </motion.div>
+              ))}
+              {cards.length === 0 && (
+                <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-neutral-200">
+                  <CreditCard className="w-12 h-12 text-neutral-200 mx-auto mb-4" />
+                  <p className="text-neutral-400 text-sm">No cards linked yet</p>
+                  <button onClick={() => setShowAddCardModal(true)} className="mt-4 text-neutral-900 font-bold text-sm">Add your first card</button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {activeTab === 'transfer' && (
           <div className="space-y-6">
-            <h2 className="text-2xl font-bold mb-6">Transfer Money</h2>
+            <h2 className="text-2xl font-bold mb-6">Money Operations</h2>
             <div className="grid grid-cols-1 gap-4">
+              <div className="grid grid-cols-2 gap-4 mb-2">
+                <button 
+                  onClick={() => setShowTransferModal('Deposit')}
+                  className="bg-green-50 p-6 rounded-3xl border border-green-100 flex flex-col items-center gap-3 hover:bg-green-100 transition-all"
+                >
+                  <ArrowDownLeft className="w-8 h-8 text-green-600" />
+                  <span className="font-bold text-green-900">Deposit</span>
+                </button>
+                <button 
+                  onClick={() => setShowTransferModal('Withdraw')}
+                  className="bg-red-50 p-6 rounded-3xl border border-red-100 flex flex-col items-center gap-3 hover:bg-red-100 transition-all"
+                >
+                  <ArrowUpRight className="w-8 h-8 text-red-600" />
+                  <span className="font-bold text-red-900">Withdraw</span>
+                </button>
+              </div>
+
               <button 
                 onClick={() => setShowTransferModal('CIMB Bank')}
                 className="bg-white p-6 rounded-3xl border border-neutral-100 flex items-center justify-between hover:border-neutral-300 transition-all"
@@ -591,6 +756,75 @@ export default function App() {
                 >
                   Confirm Swap
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'forex' && (
+          <div className="space-y-6">
+            <h2 className="text-2xl font-bold mb-6">Forex Trading</h2>
+            <div className="grid grid-cols-1 gap-4">
+              {[
+                { pair: 'USD/MYR', price: USD_MYR, change: '+0.2%' },
+                { pair: 'EUR/MYR', price: EUR_MYR, change: '-0.1%' },
+                { pair: 'GBP/MYR', price: GBP_MYR, change: '+0.5%' },
+              ].map((item) => (
+                <div key={item.pair} className="bg-white p-6 rounded-3xl border border-neutral-100 flex items-center justify-between">
+                  <div>
+                    <p className="font-bold text-lg">{item.pair}</p>
+                    <p className="text-neutral-400 text-xs">Market Price</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-mono font-bold text-lg">RM {item.price.toFixed(2)}</p>
+                    <p className={cn("text-xs font-bold", item.change.startsWith('+') ? "text-green-500" : "text-red-500")}>
+                      {item.change}
+                    </p>
+                  </div>
+                  <div className="flex gap-2 ml-4">
+                    <button 
+                      onClick={() => handleForexTrade(item.pair, 'buy', 100, item.price)}
+                      className="bg-neutral-900 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-neutral-800"
+                    >
+                      Buy
+                    </button>
+                    <button 
+                      onClick={() => handleForexTrade(item.pair, 'sell', 100, item.price)}
+                      className="border border-neutral-200 px-4 py-2 rounded-xl text-xs font-bold hover:bg-neutral-50"
+                    >
+                      Sell
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-8">
+              <h3 className="font-bold text-lg mb-4">Open Positions</h3>
+              <div className="space-y-3">
+                {forexTrades.map((trade) => (
+                  <div key={trade.id} className="bg-white p-4 rounded-2xl border border-neutral-100 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className={cn(
+                        "w-10 h-10 rounded-xl flex items-center justify-center",
+                        trade.type === 'buy' ? "bg-green-50" : "bg-red-50"
+                      )}>
+                        <BarChart3 className={cn("w-5 h-5", trade.type === 'buy' ? "text-green-600" : "text-red-600")} />
+                      </div>
+                      <div>
+                        <p className="font-bold text-sm">{trade.pair} ({trade.type.toUpperCase()})</p>
+                        <p className="text-neutral-400 text-[10px]">Entry: {trade.entryPrice.toFixed(4)}</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="font-bold text-sm">RM {trade.amount}</p>
+                      <p className="text-green-500 text-[10px] font-bold">Live: +RM 2.40</p>
+                    </div>
+                  </div>
+                ))}
+                {forexTrades.length === 0 && (
+                  <p className="text-center py-10 text-neutral-400 text-sm">No open positions</p>
+                )}
               </div>
             </div>
           </div>
@@ -717,13 +951,21 @@ export default function App() {
           <Wallet className="w-6 h-6" />
           <span className="text-[10px] font-bold">Home</span>
         </button>
+        <button onClick={() => setActiveTab('cards')} className={cn("flex flex-col items-center gap-1", activeTab === 'cards' ? "text-neutral-900" : "text-neutral-400")}>
+          <CreditCard className="w-6 h-6" />
+          <span className="text-[10px] font-bold">Cards</span>
+        </button>
         <button onClick={() => setActiveTab('transfer')} className={cn("flex flex-col items-center gap-1", activeTab === 'transfer' ? "text-neutral-900" : "text-neutral-400")}>
           <Send className="w-6 h-6" />
-          <span className="text-[10px] font-bold">Transfer</span>
+          <span className="text-[10px] font-bold">Send</span>
         </button>
         <button onClick={() => setActiveTab('swap')} className={cn("flex flex-col items-center gap-1", activeTab === 'swap' ? "text-neutral-900" : "text-neutral-400")}>
           <RefreshCw className="w-6 h-6" />
           <span className="text-[10px] font-bold">Swap</span>
+        </button>
+        <button onClick={() => setActiveTab('forex')} className={cn("flex flex-col items-center gap-1", activeTab === 'forex' ? "text-neutral-900" : "text-neutral-400")}>
+          <Globe className="w-6 h-6" />
+          <span className="text-[10px] font-bold">Forex</span>
         </button>
         <button onClick={() => setActiveTab('history')} className={cn("flex flex-col items-center gap-1", activeTab === 'history' ? "text-neutral-900" : "text-neutral-400")}>
           <History className="w-5 h-6" />
@@ -747,7 +989,11 @@ export default function App() {
               className="bg-white w-full max-w-md rounded-t-[2.5rem] sm:rounded-[2.5rem] p-8"
             >
               <div className="flex items-center justify-between mb-8">
-                <h3 className="text-xl font-bold">Transfer to {showTransferModal}</h3>
+                <h3 className="text-xl font-bold">
+                  {showTransferModal === 'Deposit' ? 'Deposit Funds' : 
+                   showTransferModal === 'Withdraw' ? 'Withdraw Funds' : 
+                   `Transfer to ${showTransferModal}`}
+                </h3>
                 <button onClick={() => setShowTransferModal(null)} className="p-2 hover:bg-neutral-100 rounded-full">
                   <X className="w-6 h-6 text-neutral-400" />
                 </button>
@@ -755,10 +1001,19 @@ export default function App() {
 
               <div className="space-y-6">
                 <div>
-                  <label className="text-xs font-bold text-neutral-400 uppercase mb-2 block">Recipient Details</label>
+                  <label className="text-xs font-bold text-neutral-400 uppercase mb-2 block">
+                    {showTransferModal === 'Deposit' ? 'Deposit Source' : 
+                     showTransferModal === 'Withdraw' ? 'Withdraw Destination' : 
+                     'Recipient Details'}
+                  </label>
                   <input 
                     type="text" 
-                    placeholder={showTransferModal === 'BTC Wallet' ? "Enter BTC Address" : "Enter Account Number / Phone"}
+                    placeholder={
+                      showTransferModal === 'BTC Wallet' ? "Enter BTC Address" : 
+                      showTransferModal === 'Deposit' ? "Enter Bank Name / Card" :
+                      showTransferModal === 'Withdraw' ? "Enter Bank Account" :
+                      "Enter Account Number / Phone"
+                    }
                     className="w-full bg-neutral-50 p-4 rounded-2xl outline-none border border-transparent focus:border-neutral-200 transition-all font-medium"
                     id="dest-input"
                   />
@@ -778,7 +1033,9 @@ export default function App() {
                     </span>
                   </div>
                   <p className="text-[10px] text-neutral-400 mt-2 font-medium">
-                    Available: {showTransferModal === 'BTC Wallet' ? `${profile?.balanceBTC.toFixed(8)} BTC` : `RM ${profile?.balanceMYR.toFixed(2)}`}
+                    {showTransferModal === 'Deposit' ? 'Funds will be added to your MYR balance' : 
+                     showTransferModal === 'BTC Wallet' ? `Available: ${profile?.balanceBTC.toFixed(8)} BTC` : 
+                     `Available: RM ${profile?.balanceMYR.toFixed(2)}`}
                   </p>
                 </div>
 
@@ -790,13 +1047,80 @@ export default function App() {
                       if (showTransferModal === 'BTC Wallet') {
                         handleBTCTransfer(dest, amt);
                       } else {
-                        handleTransfer(showTransferModal, dest, amt);
+                        handleTransfer(showTransferModal!, dest, amt);
                       }
                     }
                   }}
                   className="w-full bg-neutral-900 text-white py-4 rounded-2xl font-bold hover:bg-neutral-800 transition-colors shadow-lg"
                 >
-                  Send Now
+                  {showTransferModal === 'Deposit' ? 'Deposit Now' : 
+                   showTransferModal === 'Withdraw' ? 'Withdraw Now' : 
+                   'Send Now'}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Add Card Modal */}
+      <AnimatePresence>
+        {showAddCardModal && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-6"
+          >
+            <motion.div 
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              className="bg-white w-full max-w-md rounded-t-[2.5rem] sm:rounded-[2.5rem] p-8"
+            >
+              <div className="flex items-center justify-between mb-8">
+                <h3 className="text-xl font-bold">Add New Card</h3>
+                <button onClick={() => setShowAddCardModal(false)} className="p-2 hover:bg-neutral-100 rounded-full">
+                  <X className="w-6 h-6 text-neutral-400" />
+                </button>
+              </div>
+
+              <div className="space-y-6">
+                <div>
+                  <label className="text-xs font-bold text-neutral-400 uppercase mb-2 block">Card Type</label>
+                  <select id="card-type" className="w-full bg-neutral-50 p-4 rounded-2xl outline-none border border-transparent focus:border-neutral-200 transition-all font-medium">
+                    <option value="visa">Visa</option>
+                    <option value="mastercard">Mastercard</option>
+                    <option value="tng">TnG Card</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-neutral-400 uppercase mb-2 block">Cardholder Name</label>
+                  <input id="card-name" type="text" placeholder="John Doe" className="w-full bg-neutral-50 p-4 rounded-2xl outline-none border border-transparent focus:border-neutral-200 transition-all font-medium" />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-bold text-neutral-400 uppercase mb-2 block">Last 4 Digits</label>
+                    <input id="card-last4" type="text" maxLength={4} placeholder="1234" className="w-full bg-neutral-50 p-4 rounded-2xl outline-none border border-transparent focus:border-neutral-200 transition-all font-medium" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-neutral-400 uppercase mb-2 block">Expiry (MM/YY)</label>
+                    <input id="card-expiry" type="text" placeholder="12/28" className="w-full bg-neutral-50 p-4 rounded-2xl outline-none border border-transparent focus:border-neutral-200 transition-all font-medium" />
+                  </div>
+                </div>
+                <button 
+                  onClick={() => {
+                    const type = (document.getElementById('card-type') as HTMLSelectElement).value as any;
+                    const name = (document.getElementById('card-name') as HTMLInputElement).value;
+                    const last4 = (document.getElementById('card-last4') as HTMLInputElement).value;
+                    const expiry = (document.getElementById('card-expiry') as HTMLInputElement).value;
+                    if (name && last4.length === 4 && expiry) {
+                      handleAddCard(type, last4, expiry, name);
+                    }
+                  }}
+                  className="w-full bg-neutral-900 text-white py-4 rounded-2xl font-bold hover:bg-neutral-800 transition-colors shadow-lg"
+                >
+                  Link Card
                 </button>
               </div>
             </motion.div>

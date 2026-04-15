@@ -14,23 +14,54 @@
       },
       "required": ["uid", "email", "balanceMYR", "balanceBTC"]
     },
+    "Card": {
+      "title": "Card",
+      "description": "Linked credit/debit/TnG cards",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "type": { "type": "string", "enum": ["visa", "mastercard", "tng"] },
+        "last4": { "type": "string" },
+        "expiry": { "type": "string" },
+        "cardholderName": { "type": "string" },
+        "addedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "type", "last4", "expiry", "cardholderName"]
+    },
     "Transaction": {
       "title": "Transaction",
       "description": "Wallet transaction record",
       "type": "object",
       "properties": {
         "userId": { "type": "string", "description": "Owner of the transaction" },
-        "type": { "type": "string", "enum": ["transfer", "swap"], "description": "Type of transaction" },
-        "subType": { "type": "string", "description": "Specific destination (CIMB, TnG, BTC Wallet, or Swap)" },
+        "type": { "type": "string", "enum": ["transfer", "swap", "deposit", "withdraw", "trade"], "description": "Type of transaction" },
+        "subType": { "type": "string", "description": "Specific destination" },
         "amount": { "type": "number", "description": "Amount in source currency" },
-        "currency": { "type": "string", "enum": ["MYR", "BTC"], "description": "Currency of the amount" },
-        "targetAmount": { "type": "number", "description": "Amount in target currency (for swaps)" },
-        "targetCurrency": { "type": "string", "description": "Target currency (for swaps)" },
-        "destination": { "type": "string", "description": "Target account/wallet address" },
-        "status": { "type": "string", "enum": ["pending", "completed", "failed"], "description": "Transaction status" },
-        "timestamp": { "type": "string", "format": "date-time", "description": "Transaction time" }
+        "currency": { "type": "string", "enum": ["MYR", "BTC", "USD", "EUR", "GBP"], "description": "Currency of the amount" },
+        "targetAmount": { "type": "number" },
+        "targetCurrency": { "type": "string" },
+        "destination": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "completed", "failed"] },
+        "timestamp": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "type", "amount", "currency", "status", "timestamp"]
+    },
+    "ForexTrade": {
+      "title": "ForexTrade",
+      "description": "Forex trading positions",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "pair": { "type": "string" },
+        "type": { "type": "string", "enum": ["buy", "sell"] },
+        "entryPrice": { "type": "number" },
+        "amount": { "type": "number" },
+        "status": { "type": "string", "enum": ["open", "closed"] },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "closedAt": { "type": "string", "format": "date-time" },
+        "profit": { "type": "number" }
+      },
+      "required": ["userId", "pair", "type", "entryPrice", "amount", "status", "timestamp"]
     }
   },
   "firestore": {
@@ -38,9 +69,17 @@
       "schema": "User",
       "description": "User profiles"
     },
+    "/cards/{cardId}": {
+      "schema": "Card",
+      "description": "User linked cards"
+    },
     "/transactions/{transactionId}": {
       "schema": "Transaction",
       "description": "Global transaction logs"
+    },
+    "/forex_trades/{tradeId}": {
+      "schema": "ForexTrade",
+      "description": "Forex trading history"
     }
   }
 }
