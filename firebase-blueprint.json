@@ -1,0 +1,46 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile and wallet balances",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "description": "User email" },
+        "displayName": { "type": "string", "description": "User display name" },
+        "balanceMYR": { "type": "number", "description": "Balance in Malaysian Ringgit" },
+        "balanceBTC": { "type": "number", "description": "Balance in Bitcoin" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Account creation time" }
+      },
+      "required": ["uid", "email", "balanceMYR", "balanceBTC"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Wallet transaction record",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner of the transaction" },
+        "type": { "type": "string", "enum": ["transfer", "swap"], "description": "Type of transaction" },
+        "subType": { "type": "string", "description": "Specific destination (CIMB, TnG, BTC Wallet, or Swap)" },
+        "amount": { "type": "number", "description": "Amount in source currency" },
+        "currency": { "type": "string", "enum": ["MYR", "BTC"], "description": "Currency of the amount" },
+        "targetAmount": { "type": "number", "description": "Amount in target currency (for swaps)" },
+        "targetCurrency": { "type": "string", "description": "Target currency (for swaps)" },
+        "destination": { "type": "string", "description": "Target account/wallet address" },
+        "status": { "type": "string", "enum": ["pending", "completed", "failed"], "description": "Transaction status" },
+        "timestamp": { "type": "string", "format": "date-time", "description": "Transaction time" }
+      },
+      "required": ["userId", "type", "amount", "currency", "status", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "Global transaction logs"
+    }
+  }
+}

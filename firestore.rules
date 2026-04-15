@@ -1,0 +1,86 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - uid: string (required)
+    //   - email: string (required)
+    //   - displayName: string
+    //   - balanceMYR: number (required)
+    //   - balanceBTC: number (required)
+    //   - createdAt: timestamp (required)
+    //
+    // Collection: transactions
+    // Document ID: {transactionId}
+    // Fields:
+    //   - userId: string (required)
+    //   - type: string (transfer, swap)
+    //   - subType: string
+    //   - amount: number
+    //   - currency: string (MYR, BTC)
+    //   - targetAmount: number
+    //   - targetCurrency: string
+    //   - destination: string
+    //   - status: string (pending, completed, failed)
+    //   - timestamp: timestamp
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+        (request.auth.token.email == "razifmake@gmail.com" && request.auth.token.email_verified == true);
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'balanceMYR', 'balanceBTC', 'createdAt']) &&
+             data.uid is string && data.uid == request.auth.uid &&
+             data.email is string && data.email.size() < 100 &&
+             data.balanceMYR is number && data.balanceMYR >= 0 &&
+             data.balanceBTC is number && data.balanceBTC >= 0;
+    }
+
+    function isValidTransaction(data) {
+      return data.keys().hasAll(['userId', 'type', 'amount', 'currency', 'status', 'timestamp']) &&
+             data.userId == request.auth.uid &&
+             data.type in ['transfer', 'swap'] &&
+             data.amount is number && data.amount > 0 &&
+             data.currency in ['MYR', 'BTC'] &&
+             data.status in ['pending', 'completed', 'failed'];
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if (isOwner(userId) && isValidUser(request.resource.data)) || isAdmin();
+    }
+
+    match /transactions/{transactionId} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && isValidTransaction(request.resource.data);
+      allow update: if isAdmin(); // Only admin can update status etc
+      allow delete: if isAdmin();
+    }
+  }
+}

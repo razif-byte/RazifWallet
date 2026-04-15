@@ -1,0 +1,6 @@
+{
+  "name": "RazifWallet",
+  "description": "A simple e-wallet with CIMB, TnG, and BTC transfer capabilities, featuring real-time BTC/MYR swap and a Gemini-powered financial assistant.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
